@@ -35,7 +35,7 @@ jobs:
             ref=$(echo "$t" | jq -r '.heartbeat.ref // empty'); path=$(echo "$t" | jq -r '.heartbeat.path // empty')
             if [ -n "$path" ]; then
               raw=$(timeout 45 gh api "repos/$repo/contents/$path?ref=$ref" -H "Accept: application/vnd.github.raw" 2>/dev/null | head -c 4000)
-              hb=$(printf '%s' "$raw" | jq -r '.heartbeat // .updated_at // .generated_at // empty' 2>/dev/null)
+              hb=$(printf '%s' "$raw" | jq -r '.heartbeat_utc // .heartbeat // .updated_at // .generated_at // empty' 2>/dev/null)
               [ -z "$hb" ] && hb=$(printf '%s' "$raw" | head -n1)
               ts=$(date -u -d "$hb" +%s 2>/dev/null || echo "")
               if [ -z "$ts" ]; then reason="${reason}heartbeat unreadable in $path. "
