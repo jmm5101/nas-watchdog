@@ -1,0 +1,64 @@
+name: nas-watchdog
+# Checks every NAS offload every ~10 min. Targets live in the WATCH_CONFIG secret (JSON list), so no private names are public.
+# Each target: {"name":"pfo","repo":"owner/repo","runners":true,"heartbeat":{"ref":"branch","path":"file"},"stale_min":15,"alert_repo":"owner/repo"}
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "5,25,45 * * * *"   # backup only; the self-dispatch chain is primary
+permissions:
+  actions: write
+  contents: read
+concurrency:
+  group: nas-watchdog
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check all NAS targets
+        env:
+          GH_TOKEN: ${{ secrets.WATCH_TOKEN }}
+          WATCH_CONFIG: ${{ secrets.WATCH_CONFIG }}
+        run: |
+          set -u
+          [ -n "$GH_TOKEN" ] && [ -n "$WATCH_CONFIG" ] || { echo "WATCH_TOKEN/WATCH_CONFIG not set"; exit 0; }
+          now=$(date -u +%s)
+          echo "$WATCH_CONFIG" | jq -c '.[]' | while read -r t; do
+            name=$(echo "$t" | jq -r .name); repo=$(echo "$t" | jq -r .repo)
+            alert=$(echo "$t" | jq -r '.alert_repo // .repo'); stale=$(echo "$t" | jq -r '.stale_min // 15')
+            reason=""
+            if [ "$(echo "$t" | jq -r '.runners // false')" = "true" ]; then
+              off=$(timeout 45 gh api "repos/$repo/actions/runners" --jq '[.runners[]|select(.status!="online")|.name]|join(",")' 2>/dev/null || echo "api-error")
+              [ -n "$off" ] && reason="runners not online: $off. "
+            fi
+            ref=$(echo "$t" | jq -r '.heartbeat.ref // empty'); path=$(echo "$t" | jq -r '.heartbeat.path // empty')
+            if [ -n "$path" ]; then
+              raw=$(timeout 45 gh api "repos/$repo/contents/$path?ref=$ref" -H "Accept: application/vnd.github.raw" 2>/dev/null | head -c 4000)
+              hb=$(printf '%s' "$raw" | jq -r '.heartbeat // .updated_at // .generated_at // empty' 2>/dev/null)
+              [ -z "$hb" ] && hb=$(printf '%s' "$raw" | head -n1)
+              ts=$(date -u -d "$hb" +%s 2>/dev/null || echo "")
+              if [ -z "$ts" ]; then reason="${reason}heartbeat unreadable in $path. "
+              else age=$(( (now-ts)/60 )); [ "$age" -gt "$stale" ] && reason="${reason}heartbeat ${age} min old. "; fi
+            fi
+            echo "$name: ${reason:-ok}"
+            title="NAS ALERT $name"
+            open=$(timeout 45 gh issue list -R "$alert" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty' 2>/dev/null)
+            if [ -n "$reason" ] && [ -z "$open" ]; then
+              timeout 45 gh issue create -R "$alert" --title "$title $(TZ=America/New_York date '+%Y-%m-%d %H:%M %Z')" --body "nas-watchdog: $reason" || true
+            elif [ -z "$reason" ] && [ -n "$open" ]; then
+              timeout 45 gh issue close -R "$alert" "$open" --comment "Recovered $(TZ=America/New_York date '+%H:%M %Z')." || true
+            fi
+          done
+  rechain:
+    needs: check
+    if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wait ~10 min, then re-dispatch self
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 540
+          timeout 45 gh workflow run watchdog.yml -R "${{ github.repository }}" --ref "${{ github.ref_name }}"
