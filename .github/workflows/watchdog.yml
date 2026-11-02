@@ -26,7 +26,7 @@ jobs:
           now=$(date -u +%s)
           echo "$WATCH_CONFIG" | jq -c '.[]' | while read -r t; do
             name=$(echo "$t" | jq -r .name); repo=$(echo "$t" | jq -r .repo)
-            alert=$(echo "$t" | jq -r '.alert_repo // .repo'); stale=$(echo "$t" | jq -r '.stale_min // 15')
+            alert=$(echo "$t" | jq -r '.alert_repo // .repo'); assignee=$(echo "$t" | jq -r --arg o "${repo%%/*}" '.assignee // $o'); stale=$(echo "$t" | jq -r '.stale_min // 15')
             reason=""
             if [ "$(echo "$t" | jq -r '.runners // false')" = "true" ]; then
               off=$(timeout 45 gh api "repos/$repo/actions/runners" --jq '[.runners[]|select(.status!="online")|.name]|join(",")' 2>/dev/null || echo "api-error")
@@ -45,7 +45,7 @@ jobs:
             title="NAS ALERT $name"
             open=$(timeout 45 gh issue list -R "$alert" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty' 2>/dev/null)
             if [ -n "$reason" ] && [ -z "$open" ]; then
-              timeout 45 gh issue create -R "$alert" --title "$title $(TZ=America/New_York date '+%Y-%m-%d %H:%M %Z')" --body "nas-watchdog: $reason" || true
+              timeout 45 gh issue create -R "$alert" --title "$title $(TZ=America/New_York date '+%Y-%m-%d %H:%M %Z')" --assignee "$assignee" --body "nas-watchdog: $reason" || true
             elif [ -z "$reason" ] && [ -n "$open" ]; then
               timeout 45 gh issue close -R "$alert" "$open" --comment "Recovered $(TZ=America/New_York date '+%H:%M %Z')." || true
             fi
