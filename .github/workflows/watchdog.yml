@@ -21,7 +21,9 @@ jobs:
           GH_TOKEN: ${{ secrets.WATCH_TOKEN }}
           WATCH_CONFIG: ${{ secrets.WATCH_CONFIG }}
         run: |
-          set -u
+          # Runner shell is bash -e; a nonzero gh/jq inside the loop (e.g. jq exit 5) failed the job and sent a false 'Run failed' email.
+          # Failures are reported only through NAS ALERT issues, so the job itself always exits 0.
+          set +e -u
           [ -n "$GH_TOKEN" ] && [ -n "$WATCH_CONFIG" ] || { echo "WATCH_TOKEN/WATCH_CONFIG not set"; exit 0; }
           now=$(date -u +%s)
           echo "$WATCH_CONFIG" | jq -c '.[]' | while read -r t; do
@@ -50,6 +52,7 @@ jobs:
               timeout 45 gh issue close -R "$alert" "$open" --comment "Recovered $(TZ=America/New_York date '+%H:%M %Z')." || true
             fi
           done
+          exit 0
   rechain:
     needs: check
     if: ${{ always() && github.event_name == 'workflow_dispatch' }}
